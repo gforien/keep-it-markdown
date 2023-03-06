@@ -12,7 +12,13 @@ from os.path import join
 from pathlib import Path
 from dataclasses import dataclass
 from xmlrpc.client import boolean
+from subprocess import call
+from time import strftime, strptime
+import logging
 
+logging.basicConfig()
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 KEEP_KEYRING_ID = 'google-keep-token'
 KEEP_NOTE_URL = "https://keep.google.com/#NOTE/"
@@ -354,10 +360,20 @@ class FileService:
         try:
             f = open(file_name, "w+", encoding='utf-8', errors="ignore")
             f.write(data)
-            f.close
+            os.fsync(f)
+            f.close()
         except Exception as e:
             raise Exception("Error in write_file: " + " -- " + TECH_ERR + repr(e))
 
+    def write_file_metadata(self, file_name, t_created, t_updated):
+        try:
+            btime = strftime("%m/%d/%Y", t_created)
+            mtime = strftime("%m/%d/%Y", t_updated)
+            command = f"SetFile -d {btime} -m {mtime} \"{file_name}\""
+            logger.debug(f"command = {command}")
+            call(command, shell=True)
+        except Exception as e:
+            raise Exception("Error in write_file_metadata: " + " -- " + TECH_ERR + repr(e))
 
     def download_file(self, file_url, file_name, file_path):
         try:
@@ -420,8 +436,12 @@ def save_md_file(note, note_tags, note_date, overwrite, skip_existing):
             md_text = Markdown().format_path(Config().get("media_path") + 
                 "/" + media, "", True) + "\n" + md_text
  
+        t_created = strptime(note.timestamps["created"].split('.')[0], '%Y-%m-%d %H:%M:%S')
+        t_updated = strptime(note.timestamps["updated"].split('.')[0], '%Y-%m-%d %H:%M:%S')
 
         md_file = Path(fs.outpath(), note.title + ".md")
+        md_file = Path(fs.outpath(), strftime('%Y-%m-%d', t_created) + " . " + note.title + ".md")
+        logger.debug(f"md_file = {md_file}")
         if not overwrite:
             if md_file.exists():
                 if skip_existing:
@@ -429,21 +449,22 @@ def save_md_file(note, note_tags, note_date, overwrite, skip_existing):
                 else:
                     note.title = NameService().check_file_exists(
                             md_file, fs.outpath(), note.title, note_date)
-                    md_file = Path(fs.outpath(), note.title + ".md")
+                    md_file = Path(fs.outpath(), strftime('%Y-%m-%d', t_created) + " . " + note.title + ".md")
 
-        print(note.title)
-        print(note_tags)
-        print(note_date + "\r\n")
-
+        logger.info(note.title)
+        logger.info(note_tags)
+        logger.info(strftime("%a, %d %b %Y %H:%M:%S +0000",t_updated))
 
         markdown_data = (
-            Markdown().convert_urls(md_text) + "\n" + 
-            "\n" + note_tags + "\n\n" + 
-            "Created: " + note.timestamps["created"][ : note.timestamps["created"].rfind('.') ] + "   ---   "
-            "Updated: " + note.timestamps["updated"][ : note.timestamps["updated"].rfind('.') ] + "\n\n" + 
-            Markdown().format_path(KEEP_NOTE_URL + str(note.id), "", False) + "\n\n")
+            strftime('#%Y/%m/%d', t_created) + " " + note_tags + "\n\n" +
+            Markdown().convert_urls(md_text) + "\n"
+        )
 
         fs.write_file(md_file, markdown_data)
+
+        # write dates as metadata
+        fs.write_file_metadata(md_file, t_created, t_updated)
+        print("\r\n")
         return (1)
     except Exception as e:
         raise Exception("Problem with markdown file creation: " + str(md_file) + " -- " + TECH_ERR + repr(e))
@@ -568,7 +589,7 @@ def keep_query_convert(keep, keepquery, opts):
 
         return (count)
     except:
-        print("Error in keep_query_convert()")
+        logger.exception("Error in keep_query_convert()")
         raise
 
 
